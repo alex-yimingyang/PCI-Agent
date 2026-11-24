@@ -1,7 +1,5 @@
 # PCI Agent
 
-**Public edition · GitHub publisher [alex-yimingyang](https://github.com/alex-yimingyang)**
-
 PCI Agent assesses the Pavement Condition Index (PCI) of an asphalt road sample unit using your own images or masks. OpenAI Codex and Anthropic Claude connect to the same local Python tools through the Model Context Protocol (MCP). Choose a method according to the evidence you can supply.
 
 | Method | Input | Output |
