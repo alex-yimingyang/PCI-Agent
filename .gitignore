@@ -1,0 +1,16 @@
+# Public source distribution. Only source, documentation, and the scoring
+# configuration are tracked. New file types can be explicitly opted in.
+*
+!/.gitignore
+!/README.md
+!/requirements*.txt
+!/*.py
+!/*.sh
+!/engine/
+!/engine/*.py
+!/engine/curves/
+!/engine/curves/faa_road_ac_tables.json
+!/fusion_source/
+!/fusion_source/*.py
+!/tests/
+!/tests/*.py
