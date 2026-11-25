@@ -1,14 +1,12 @@
 # PCI Agent
 
-PCI Agent assesses one asphalt pavement Sample Unit (SU) per run. It assembles the source imagery, identifies the travel lanes in RGB, masks surrounding areas, runs a detector selected by the user, sends marked and original RGB crops to the vision model in Codex or Claude for individual grading, and computes density and a PCI interval with the bundled road deduct curves. Public edition maintained by [alex-yimingyang](https://github.com/alex-yimingyang).
+PCI Agent assesses one asphalt pavement Sample Unit (SU) per run. It assembles the source imagery, identifies the travel lanes in RGB, masks surrounding areas, runs a detector selected by the user, sends marked and original RGB crops to the vision model in Codex or Claude for individual grading, and computes density and a PCI interval with the bundled road deduct curves.
 
-## Worked example from the four-method report
+## Worked example
 
 ![SU14 original pavement above the reviewed Method 4 mask overlay. PCI 30.9–36.5, Very Poor.](docs/su14-method4.jpg)
 
 **SU14 · PCI 30.9–36.5 · Very Poor.** Both panels show the full 470.6 m² sample unit at the same scale. Orange marks linear cracks, pink marks alligator cracking and blue marks block cracking. Within each class, darker shades indicate higher severity.
-
-This example reproduces **Method 4 (Labeled masks)** on page 14 of the *SU01–20 Four-Method PCI Comparison, Reviewed Boundaries* report. It uses the report’s class labels and boundaries, with per-instance severity grading and false-positive review. Of 941 candidates, 937 contributed to the score, including 201.6 m of linear cracking, 63.8 m² of block cracking and 101.2 m² of alligator cracking. The interval shown is the archived report result. The current agent starts a new assessment from original images and a user-selected detector.
 
 ## Installation and launch
 
