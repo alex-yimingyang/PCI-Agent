@@ -51,24 +51,7 @@ For 16-bit, floating-point, indexed-color or multispectral imagery, export a gra
 
 ## Agent architecture
 
-```mermaid
-flowchart TD
-    U["User · images, detector, scale and SU"]
-    A["Local MCP tools · align, mosaic and crop"]
-    S["Session vision model · trace assessed lanes from RGB"]
-    T["Local tools · tile the masked SU"]
-    D["Selected local or server detector · candidate boxes"]
-    V["Session vision model · review candidates and trace each distress"]
-    M["Local tools · clip geometry, measure quantity and compute density"]
-    G["Session vision model · inspect measured crops and grade each instance"]
-    P["Local scoring · search grade combinations with road_pci.py and deduct curves"]
-    O["SU result · PCI interval, condition and audit files"]
-    R["Full-resolution travel-lane mask"]
-    U --> A --> S --> T --> D --> V --> M --> G --> P --> O
-    S --> R
-    R --> M
-    R --> T
-```
+![PCI Agent architecture showing how the vision model, local tools and distress detector produce a PCI interval](docs/pci_agent_fig_v2.svg)
 
 ## Define one Sample Unit
 
