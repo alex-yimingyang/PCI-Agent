@@ -472,22 +472,3 @@ def measure(run,payload):
     unassigned={key:known[key]["foreground_px2"]-n for key,n in covered.items() if known[key]["foreground_px2"]>n}
     return dict(rows=rows,unassigned_pixels=unassigned,cross_type_overlap_px2=cross_overlap,
                 measurement=dict(block_px=BLOCK,halo_px=halo,coordinate_basis="station_to_UTM" if mapper else "uniform_pixel_grid"))
-
-
-def grading_crops(folder, payload):
-    images = []
-    with rasterio.open(payload['image']) as ds:
-        if (ds.width, ds.height) != (payload['width'], payload['height']):
-            raise ValueError('Grading RGB dimensions must match the mask canvas.')
-        for index, row in enumerate(payload['rows'], payload['cursor']):
-            bounds = intersect(region(row, payload), payload['bounds'][row['mask_id']])
-            if not bounds:
-                raise ValueError('Instance box does not intersect mask bounds.')
-            x0,y0,x1,y1 = bounds
-            x,y = max(0,x0-24),max(0,y0-24)
-            w,h = min(ds.width,x1+24)-x,min(ds.height,y1+24)-y
-            scale = min(1,768/max(w,h))
-            path = folder/f'instance_{index}.png'
-            save_image(Image.fromarray(rgb(ds,(x,y,w,h),(max(1,round(h*scale)),max(1,round(w*scale))))),path)
-            images.append(dict(role=f"RGB surface {row['mask_id']} / row {index+1}",bounds_xyxy=bounds,path=str(path)))
-    return images

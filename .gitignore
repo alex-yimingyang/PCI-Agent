@@ -14,3 +14,5 @@
 !/fusion_source/*.py
 !/tests/
 !/tests/*.py
+!/docs/
+!/docs/su14-method4.jpg

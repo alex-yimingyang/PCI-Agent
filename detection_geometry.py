@@ -18,18 +18,6 @@ def shape_of(row):
     return {'type':'Polygon','coordinates':rings}
 
 
-def pavement_roi(run,payload):
-    points=payload['polygon'];geometry={'type':'Polygon','coordinates':[points+[points[0]]]}
-    with rasterio.open(payload['image_path']) as src:
-        if any(not (0<=x<=src.width and 0<=y<=src.height) for x,y in points):raise ValueError('Pavement polygon lies outside the original image.')
-        p=run/'model_pavement_roi.tif';profile=native.profile(src.width,src.height);profile.update(transform=src.transform,crs=src.crs)
-        with rasterio.open(p,'w',**profile) as dst:
-            for x,y,w,h in native.rects(src.width,src.height):
-                data=rasterize([(geometry,1)],out_shape=(h,w),transform=Affine.translation(x,y),fill=0,all_touched=False,dtype='uint8')
-                if data.any():dst.write(data,1,window=Window(x,y,w,h))
-    return dict(roi_path=str(p),source='conversation_model_original_RGB_pavement_polygon')
-
-
 def detail_boxes(mask,extent,width,height):
     x,y,r,b=extent;factor=min(1.,384/(r-x),384/(b-y));h=max(1,round((b-y)*factor));w=max(1,round((r-x)*factor))
     preview=native.preview_binary(mask,(x,y,r-x,b-y),(h,w));yy,xx=np.nonzero(preview);result=[]

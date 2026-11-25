@@ -1,132 +1,147 @@
 # PCI Agent
 
-PCI Agent assesses the Pavement Condition Index (PCI) of an asphalt road sample unit using your own images or masks. OpenAI Codex and Anthropic Claude connect to the same local Python tools through the Model Context Protocol (MCP). Choose a method according to the evidence you can supply.
+PCI Agent assesses one asphalt pavement Sample Unit (SU) per run. It assembles the source imagery, identifies the travel lanes in RGB, masks surrounding areas, runs a detector selected by the user, sends marked and original RGB crops to the vision model in Codex or Claude for individual grading, and computes density and a PCI interval with the bundled road deduct curves. Public edition maintained by [alex-yimingyang](https://github.com/alex-yimingyang).
 
-| Method | Input | Output |
-|---|---|---|
-| M1 · Direct visual estimate | Original RGB image | Whole-unit visual PCI interval with evidence for each endpoint |
-| M2 · Detection from RGB | Original RGB image | Model-drawn distress geometry, per-instance severity, physical quantities and rule-based PCI |
-| M3 · Unlabeled SAM3 masks | Binary prediction masks from your SAM3 workflow, optional aligned RGB for severity | Classes inferred from mask shape, measured distress quantities and rule-based PCI |
-| M4 · Labeled masks | Instance masks with supplied classes, optional aligned RGB | Per-instance severity, measured quantities and rule-based PCI using the supplied classes |
+## Worked example from the four-method report
 
-The package includes code and the road deduct-curve configuration used for scoring. Supply your own pavement imagery, masks and scale. Geometry and scoring run locally. During a visual assessment, evidence returned to your signed-in chat can be processed by the model provider. The scoring tools require no separate model API key.
+![SU14 original pavement above the reviewed Method 4 mask overlay. PCI 30.9–36.5, Very Poor.](docs/su14-method4.jpg)
 
-## 1. Install and check the tools
+**SU14 · PCI 30.9–36.5 · Very Poor.** Both panels show the full 470.6 m² sample unit at the same scale. Orange marks linear cracks, pink marks alligator cracking and blue marks block cracking. Within each class, darker shades indicate higher severity.
 
-Use macOS or Linux with Python 3.12. On macOS with Homebrew, run `brew install python@3.12` if `python3.12` is unavailable. Extract the release ZIP and open its `PCI-Agent` folder. If the repository has been published under the name shown below, you can also obtain the same source with:
+This example reproduces **Method 4 (Labeled masks)** on page 14 of the *SU01–20 Four-Method PCI Comparison, Reviewed Boundaries* report. It uses the report’s class labels and boundaries, with per-instance severity grading and false-positive review. Of 941 candidates, 937 contributed to the score, including 201.6 m of linear cracking, 63.8 m² of block cracking and 101.2 m² of alligator cracking. The interval shown is the archived report result. The current agent starts a new assessment from original images and a user-selected detector.
 
-```sh
-git clone https://github.com/alex-yimingyang/PCI-Agent.git
-cd PCI-Agent
-```
+## Installation and launch
 
-Run the following from the folder containing `launch-mcp.sh`. To keep inputs and run records local, store your road data outside the repository. Each new run writes its outputs under `runs/` by default.
+Install Python 3.12 and run these commands from the project directory.
 
 ```sh
 python3.12 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt -r requirements-images.txt
-export PCI_IMAGE_PYTHON="$PWD/.venv/bin/python"
 ```
 
-Verify the four methods before signing into a model client. These tests create small synthetic geometries in temporary directories, exercise the MCP tools through a real stdio connection, and check the calculations. Both commands should finish with exit code 0. A separate native-window test is available for large images.
+- **Codex CLI** — sign in to Codex, then run `sh ./launch-chat.sh` in this directory.
+- **Claude Code** — run `claude mcp add --scope local --transport stdio road_pci -- /bin/sh "$PWD/launch-mcp.sh"`, then open `claude` in this directory.
+- **Desktop MCP clients** — configure a stdio server named `road_pci`, command `/bin/sh`, and the absolute path to `launch-mcp.sh` as its sole argument. Allow 620 seconds per tool call for larger units.
 
-```sh
-.venv/bin/python -B tests/verify_image_agents.py
-.venv/bin/python -B tests/verify_image_detection.py
-# Optional large-image and mask-alignment checks
-.venv/bin/python -B tests/verify_native_windows.py
+Provide the detector address for each new assessment. For a **local model**, give an existing Ultralytics `.pt` checkpoint and install a compatible Ultralytics version in the detector environment. Set `PCI_DETECTOR_PYTHON` to that environment’s Python if it differs from the image environment. For a **server model**, give its HTTP(S) inference endpoint. The client sends each PNG tile to the selected endpoint and asks the current vision session to grade the resulting crops. The public package includes the report figure above. Assessment inputs and run records are stored separately.
+
+On a detector host, start the supplied adapter with `python serve_detector.py --weights /models/pavement.pt --port 8765`. Its default bind address is loopback. From the workstation, `ssh -L 8765:127.0.0.1:8765 user@gpu-host` makes the endpoint available at `http://127.0.0.1:8765/predict`. An existing compatible server accepts POST with a raw PNG body, `Content-Type: image/png`, and an `X-Confidence` threshold. It returns `{"detections":[{"class_id":0,"label":"linear_crack","confidence":0.9,"box":[2,3,80,110]}]}` in tile-local pixel coordinates.
+
+## What to provide
+
+| Input | What to give the agent |
+|---|---|
+| Original pavement images | Give a file path the computer running the MCP server can read, one per image. Use one photo covering the SU or adjoining orthophotos of the same SU. |
+| Distress detector | Give the path to a local Ultralytics detection or instance-segmentation `.pt` checkpoint, or the full HTTP(S) inference endpoint. Choose the detector for each assessment. Codex or Claude supplies the vision session for lane delineation and severity review. |
+| Physical scale for Quantity | Give meters per pixel (e.g., **0.002 m/px**), the actual width or height of the first full source image, or the known area of the valid pavement. An aligned CAE station-to-UTM mapping is also supported. If unknown, say **“use pixels.”** |
+| Sample Unit for Density | Identify the road section and lanes to assess. If one image covers the unit, say **“use this image as the SU.”** For several images, confirm they form one unit. Supply a boundary, dimensions and location, or a known area if the unit is smaller than the imagery. A reference area alone may require a follow-up to locate the boundary. |
+| Placement or boundary, when needed | With unreferenced images that lack reliable overlap, give the top-left pixel offset of every image. An optional SU boundary may be a rectangle, a polygon, or a single-channel mask aligned to the **uncropped mosaic** (0 outside, nonzero inside). The agent generates the travel-lane mask after cropping. |
+
+### Image formats
+
+| Verified input | Pixel layout | Usage |
+|---|---|---|
+| JPEG (`.jpg`, `.jpeg`) | 8-bit grayscale or RGB | A single original or a set of aligned photos. JPEG compression can obscure fine cracks. |
+| PNG (`.png`) | 8-bit grayscale, RGB or RGBA | Original frames and lossless tiles. Transparent pixels are excluded from coverage. |
+| TIFF / GeoTIFF (`.tif`, `.tiff`) | 8-bit grayscale, RGB or RGBA | Large orthophotos and mosaics. GeoTIFFs on the same coordinate system and pixel grid can be placed automatically. |
+
+For 16-bit, floating-point, indexed-color or multispectral imagery, export a grayscale or true-color 8-bit copy and preserve the pixel grid and georeferencing. For video, supply extracted still frames. Reliable physical measurement requires a consistent ground scale across the assessed pavement; orthorectify oblique views before measuring.
+
+**Single-image example** — “Assess `/data/SU01.tif` with the detector at `/models/pavement.pt`. Use this image as one SU. I have no physical scale, so use pixels. Exclude shoulders and grass and return the per-instance measurements and PCI proxy interval.”
+
+## Agent architecture
+
+```mermaid
+flowchart TD
+    U["User · images, detector, scale and SU"]
+    A["Local MCP tools · align, mosaic and crop"]
+    S["Session vision model · trace assessed lanes from RGB"]
+    T["Local tools · tile the masked SU"]
+    D["Selected local or server detector · candidate boxes"]
+    V["Session vision model · review candidates and trace each distress"]
+    M["Local tools · clip geometry, measure quantity and compute density"]
+    G["Session vision model · inspect measured crops and grade each instance"]
+    P["Local scoring · search grade combinations with road_pci.py and deduct curves"]
+    O["SU result · PCI interval, condition and audit files"]
+    R["Full-resolution travel-lane mask"]
+    U --> A --> S --> T --> D --> V --> M --> G --> P --> O
+    S --> R
+    R --> M
+    R --> T
 ```
 
-## 2A. Run with OpenAI Codex
+## Define one Sample Unit
 
-**Terminal.** If Codex CLI is already available, check it with `codex --version`. To install it on macOS with Homebrew, run `brew install --cask codex`. On Linux with npm, use `npm install -g @openai/codex`. Run `codex` once, choose **Sign in with ChatGPT**, then exit to the terminal. [Codex CLI installation and sign-in](https://github.com/openai/codex#quickstart)
+Start with the original orthophoto or adjoining orthophotos at a common native scale. The agent asks for the detector, the physical scale for Quantity, and the boundary or area of the SU for Density.
 
-From the extracted package folder, start one method. Choose one line per session.
+| Input condition | Agent behavior |
+|---|---|
+| One photo, no separate SU | Uses that image’s valid pavement pixels as one SU. |
+| One photo covers only part of a specified SU | Requests neighboring photos if the supplied imagery falls short of the target extent or area. |
+| Multiple photos cover one SU | Places images by supplied integer offsets, compatible GeoTIFF grids, or reliable visual matches in overlapping orthophotos. It takes each location’s first valid original pixel in input order. Overlaps count once. |
+| A source image or mosaic extends beyond the SU | Crops to the supplied rectangle, polygon or pavement ROI. With rectangular SU dimensions it crops at the requested origin, defaulting to the mosaic’s upper-left corner. If only a smaller area is known, the agent asks for its location or boundary. |
+| The complete SU exceeds the detector’s input size | Uses overlapping native 768- and 1536-pixel windows, converts predictions to the cropped SU grid, and merges overlapping same-class boxes. One set of reviewed instances is measured against one SU area. |
 
-```sh
-export PCI_IMAGE_PYTHON="$PWD/.venv/bin/python"
-sh ./launch-chat.sh --agent M1 "Use M1. Ask for my original road image and physical scale. Respond in English."
-sh ./launch-chat.sh --agent M2 "Use M2. Detect distress from original RGB. Ask for my inputs in English."
-sh ./launch-chat.sh --agent M3 "Use M3. Classify unlabeled SAM3 masks first. Ask for my inputs in English."
-sh ./launch-chat.sh --agent M4 "Use M4. Keep the supplied mask classes. Ask for my inputs in English."
-```
+For inputs without georeferencing, automatic alignment requires a common orientation, square pixel scale, and distinctive overlapping pavement texture. Photos with different viewpoints or scales should first be orthorectified. For non-overlapping adjacent tiles, provide their known placement. Missing pixels inside a requested boundary trigger a request for additional imagery. An optional user-supplied boundary limits the area considered for automatic road segmentation.
 
-Enter `/mcp` in the session and look for `road_pci`. For M3, the available tools should include `prepare_unlabeled_mask_agent` and `read_mask_grading_crops`. The launcher configures the service for this session. Each command opens a new chat dedicated to one method. [Codex MCP configuration](https://developers.openai.com/codex/mcp/)
+### Example request
 
-**Codex desktop.** To make the service available in a desktop chat, open the extracted folder as a trusted project. Merge the following entry into its `.codex/config.toml`. Create the directory and file if needed. Replace both occurrences of `/absolute/path/to/PCI-Agent` with the actual folder printed by `pwd`. Start a new local chat and select the method by name in your request. [Codex project-scoped MCP configuration](https://developers.openai.com/codex/mcp/)
+> Assess these two road images as one SU. The second image starts 600 pixels to the right of the first. Use the SU rectangle from (120, 30) to (1320, 730), a scale of 2 mm per pixel, and the detector at [my path or endpoint]. Review each numbered candidate, grade its severity, and report the SU PCI interval.
 
-```toml
-[mcp_servers.road_pci]
-command = "/bin/sh"
-args = ["/absolute/path/to/PCI-Agent/launch-mcp.sh"]
-startup_timeout_sec = 30
-tool_timeout_sec = 620
-
-[mcp_servers.road_pci.env]
-PCI_IMAGE_PYTHON = "/absolute/path/to/PCI-Agent/.venv/bin/python"
-```
-
-## 2B. Run with Claude
-
-**Claude Code in Terminal.** Check `claude --version`. On macOS with Homebrew, install it with `brew install --cask claude-code` if needed. Linux users can follow Anthropic’s native installer instructions. Start `claude` once and follow the sign-in prompts, then exit to the terminal. [Claude Code installation and sign-in](https://code.claude.com/docs/en/quickstart)
-
-From the extracted package folder, register the service once. Local scope makes the registration private to your account in this project. The quoted paths also work when the folder name contains spaces. [Claude Code local MCP servers](https://code.claude.com/docs/en/mcp)
-
-```sh
-claude mcp add --scope local --transport stdio road_pci -- /usr/bin/env \
-  "PCI_IMAGE_PYTHON=$PWD/.venv/bin/python" /bin/sh "$PWD/launch-mcp.sh"
-claude mcp get road_pci
-claude
-```
-
-Look for **Connected** in the terminal status. In the Claude session, enter `/mcp` to inspect the tools. All four methods are available through this registration. Start a fresh chat for each independent assessment and use a prompt from section 3.
-
-**Claude Desktop on macOS.** Install and open Claude Desktop, then go to **Claude → Settings → Developer → Edit Config**. Add the `road_pci` entry under `mcpServers` in `~/Library/Application Support/Claude/claude_desktop_config.json`. Merge it with any existing servers. Replace both absolute paths, save the file, fully quit Claude Desktop, and reopen it. In a new chat, check for the tools and give Claude an absolute path to your sample. [Claude Desktop local server setup](https://modelcontextprotocol.io/docs/develop/connect-local-servers)
+The `prepare_sample_unit` tool accepts the following inputs:
 
 ```json
 {
-  "mcpServers": {
-    "road_pci": {
-      "command": "/bin/sh",
-      "args": ["/absolute/path/to/PCI-Agent/launch-mcp.sh"],
-      "env": {
-        "PCI_IMAGE_PYTHON": "/absolute/path/to/PCI-Agent/.venv/bin/python"
-      }
-    }
-  }
+  "images": [
+    {"path":"/data/frame-a.png","offset_xy":[0,0]},
+    {"path":"/data/frame-b.png","offset_xy":[600,0]}
+  ],
+  "model_address":"/models/pavement.pt",
+  "physical_scale":{"status":"known","m_per_px":0.002},
+  "sample_unit":{"mode":"roi"},
+  "bounds_xyxy":[120,30,1320,730]
 }
 ```
 
-## 3. Assess your first new sample
+Pixel rectangles use inclusive left/top and exclusive right/bottom edges. With georeferencing or visual alignment, the first image is at (0,0); explicit offsets define their own common origin. A polygon uses this same grid. A binary ROI raster covers the uncropped mosaic extent. Numbered detector boxes and subsequent instance geometry use the **cropped SU’s** upper-left corner as (0,0). The saved assembly manifest records the translation to the source grid.
 
-Use the same sample boundary, original image resolution and physical scale for all four methods. An ROI is a binary mask identifying the pavement included in the density denominator. If the sample has shoulders, background or transparent borders, check the ROI before comparing scores. For an independent visual comparison, start M1 and M2 before showing the session any report, distress labels or results from the other methods.
+For a rectangular SU use `{"mode":"roi","size_px":[1200,700],"origin_xy":[120,30]}`, or `size_m` with a uniform physical scale. Use `{"mode":"mosaic"}` to confirm that the full rectangular multi-image mosaic is one unit. Use `{"mode":"provided","area_px2":840000}` or `area_m2` to check the imagery against a known area. With a separate physical area and no pixel scale, provide its boundary as well. For a single original covering the whole SU, use `{"mode":"single_image"}`.
 
-Replace the bracketed fields below. Each prompt works in either client.
+## Automatic travel-lane segmentation
 
-| Method | Prompt to paste |
-|---|---|
-| **M1 · Direct visual PCI** | “Use M1 on [original image]. The scale is [value] mm/pixel and the pavement ROI is [path]. Inspect the whole SU. Give the visual PCI interval and condition rating, with separate image evidence for each endpoint.” |
-| **M2 · Detection from original RGB** | “Use M2 on [original image] with [scale] and [ROI]. Detect and classify each distress from RGB. Mark linear crack centerlines and affected-area polygons. Check each instance crop, grade severity, measure quantities and density, then compute the PCI interval and rating.” |
-| **M3 · Unlabeled SAM3 masks** | “Use M3 with [SAM3 binary instance manifest], [ROI] and [scale]. Infer and freeze classes from mask shape. Then use [aligned original RGB] to assess each instance’s surface severity. Return the PCI interval, rating, low-confidence instances and audit path.” |
-| **M4 · Labeled masks** | “Use M4 with [labeled mask manifest], [aligned original RGB], [ROI] and [scale]. Preserve the supplied classes and boundaries. Grade each instance and review suspected false positives. Show the retained and screened inventories and their PCI intervals and ratings.” |
+After alignment and cropping, `prepare_sample_unit` returns the original RGB overview. The current vision model in Codex or Claude identifies the lanes to assess, using edge lines, curbs, changes in surface and continuity along the road. For long units or ambiguous edges it can inspect original RGB windows with `read_carriageway_detail`. It calls `segment_carriageway_and_detect` with the lane outline in cropped SU coordinates. This step needs no separate segmentation model, endpoint or manually drawn mask.
 
-**Physical scale.** Supply meters per native pixel or the measured area of the same pavement ROI. For 2 mm/pixel, the tool input is `{"status":"known","m_per_px":0.002}`. If scale is unavailable, say “Use pixel units.” The generic M2–M4 tools then report pixel quantities and a `pci_proxy_interval` normalized to a 5,000 ft² reference area. M1 gives a visual interval. For resized images, convert the scale to the pixel size of the image actually supplied.
+Paved and unpaved shoulders, grass, soil, sidewalks and median islands are excluded. Markings, patches, shadows and visible distress within the assessed lanes stay in the mask. Fully paved inputs can retain the entire valid area. If the model cannot determine the carriageway boundary even after inspecting detailed views, the workflow requests a verified boundary. Background-only units stop before detection or scoring.
 
-**Mask format.** Use a single-channel binary image with zero background and one nonzero foreground value. One file per instance is easiest to audit. For a cropped mask, supply `bounds_xyxy` in original-image pixels, with exclusive right and bottom edges. M3 needs a full-canvas ROI when only cropped masks are supplied. A full-canvas mask can omit the bounds. Here is one M3 manifest entry:
+The same native-resolution mask limits detector windows, clips distress measurements and defines the area used for density. The run saves the mask (`carriageway.tif`), an overlay with excluded areas in red (`carriageway-overlay.jpg`), and the segmentation outline, visual evidence and pixel counts (`carriageway.json`). To revise an outline, reuse the original preparation run ID. Each revision creates a separate assessment.
 
-```json
-[{"path":"/data/SU21/mask_001.png","bounds_xyxy":[400,200,520,350],"semantics":"crack_trace"}]
+## Measurement and scoring
+
+Without physical calibration, answer `{"status":"unavailable"}`. Lengths are measured in pixels and areas in square pixels. With calibration they are reported in meters and square meters, and potholes are counted individually. Full-image width or height in meters refers to the first source before cropping. A supplied calibration area refers to the valid pavement on the assembled SU. Density uses the retained travel-lane area within the selected SU, in compatible units. In the absence of physical calibration, a reference-area PCI proxy is reported separately when computable.
+
+The client reviews detector labels and paired RGB crops, traces centerlines or affected boundaries, or records a reason to dismiss a candidate. It then inspects the measured geometry and assigns severity per instance. The PCI interval varies grades within these assessed ranges. Detector confidence, box area, and window-level scores do not substitute for this assessment.
+
+Each run persists local audit files including `assembly.json`, the cropped SU raster, detector evidence, instance measurements and the PCI result. Set `PCI_AGENT_RUNS` to select their parent directory. `PCI_IMAGE_PYTHON` selects the Python with the image dependencies.
+
+## What the models return and where to find it
+
+| Producer | Output for one SU | Files to inspect |
+|---|---|---|
+| Session vision model, lane assessment | An assessed-lane outline and the visual evidence for its boundary. Local tools rasterize it and count the retained and excluded pixels. | `carriageway.json`, `carriageway.tif`, `carriageway-overlay.jpg` (red means excluded) |
+| User-selected distress detector | Candidate boxes with a class ID, label and confidence for each detection. The agent merges repeated detections across windows, assigns instance IDs and logs candidates fully outside the lane. | `detector.json`, `detector_overview.jpg` |
+| Session vision model, instance review | A reviewed class and traced centerline or affected-area boundary, or a reason for dismissal. After viewing the measured crop, the model assigns L, M, H or a justified adjacent range (L–M or M–H) to each retained instance and records the visual evidence. | `detections.json`, `instance_judgments_and_measurements.json` |
+| Local measurement tools | Linear cracks by length (m or px), alligator cracking, block cracking and patches by affected area (m² or px²), potholes by count. Each row gives quantity, density and units. Area density is a percentage; length and count densities are reported per 100 units of retained lane area. | `detected_measurements.json` |
+| Local PCI engine | The SU lower and upper PCI and the corresponding condition label(s) in the tool response. `pci_interval` uses physical calibration. Without a scale, `pci_proxy_interval` uses an assumed **5,000 ft²** reference area. An unresolved crack subtype yields a preferred-class estimate. | `detected_pci.json`, `pci_bounds_details.json`, `result/deduct_values.csv`, `result/cdv_iterations.csv` |
+
+The interval varies the allowed severity of each instance while holding its reviewed class and geometry fixed. Unresolved grading or geometry conflicts can return a review status before a score is available. A scene containing only background stops at lane assessment.
+
+Files are stored under `runs/<run_id>/` by default. Preparation, measurement and scoring have separate run IDs. Open the final tool response’s `result_json` first. The result records `prepared_run_id` and `measurement_run_id`; its `carriageway.source_run_id` points to the original SU assembly.
+
+## Verification
+
+```sh
+.venv/bin/python -B tests/verify_sample_imagery.py
+.venv/bin/python -B tests/verify_detector_handoff.py
 ```
 
-For M4, add a `kind` field such as `"linear_crack"`. Other supported values are `alligator`, `block_crack`, `patch` and `pothole`. Use `affected_region` for a filled damaged area. Linear cracks use skeleton length, area distresses use affected surface area, and potholes use counts. Give each instance a supported grade or an adjacent severity range. Record assumptions and confidence when visible surface evidence is limited.
-
-**M4 false-positive review.** Grade every candidate first and keep its ID, class, boundary, severity range and rationale. Review the candidates, then score the retained and screened inventories in separate runs when both scenarios are requested. Use the same grades, scale and pavement ROI for both. Record the reason for each excluded instance.
-
-## 4. Read and troubleshoot the output
-
-- **Find a run.** Ask for the `run_id` and the absolute path of the result JSON. By default, each run has its own subdirectory under `runs/`. Use the interval’s `_condition` field for the English road-condition label. An interval spanning categories shows both endpoint labels, such as *Fair to Good*. Instance severity (L/M/H) describes one distress, while the PCI condition describes the whole SU.
-- **Check an unusually wide interval.** Inspect the per-instance classes, severity ranges, measured quantities and density. Check the search status and endpoint gap if the solver reached its budget. For large images, follow the native-window review prompts before requesting the whole-unit score.
-- **If the service fails to connect**, run the two installation checks in section 1 first. Check that the configured launcher path exists and that `.venv/bin/python` can import the image libraries with `.venv/bin/python -c 'import cv2, rasterio, PIL'`. Update absolute paths after moving the package. Restart the desktop client after editing its configuration.
-- **If the returned score is a pixel proxy**, provide the native pixel scale or the measured area and matching ROI, and start a new run. If an M3 class change is rejected during RGB review, the mask classification has already been frozen. Start a new mask-only classification run to revise it.
-
-The rule-based methods use the numeric configuration in `engine/curves/faa_road_ac_tables.json`. It records the curve source and interpolation assumptions. Report these outputs as research estimates. The visible-surface assessment does not measure hidden distress or pothole depth.
+The first test checks registration, pixel-exact cropping, missing coverage, overlap accounting and native-window coverage. The second checks masking, excluded candidates, clipped crack lengths and net density area, then exercises the PCI engine with fixture detector predictions.
